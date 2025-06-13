@@ -1,18 +1,114 @@
 # gui.py
 
+import os
 import pandas as pd
 import gradio as gr
 import matplotlib.pyplot as plt
-from airtable import Airtable
+import requests
+from dotenv import load_dotenv
 from sku_mapper import fuzzy_map_skus, load_file
 
-# Airtable credentials (replace with your actual values)
-AIRTABLE_BASE_ID = "your_base_id_here"
-AIRTABLE_API_KEY = "your_airtable_api_key_here"
-AIRTABLE_TABLE_NAME = "Sales"
+# 🔐 Load Airtable credentials from .env
+load_dotenv()
+AIRTABLE_PAT = os.getenv("AIRTABLE_PAT")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME", "Sales")
+AIRTABLE_PRODUCT_TABLE_NAME = "Products"    
 
-airtable = Airtable(AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, AIRTABLE_API_KEY)
+def get_msku_record_id(msku_value):
+    """Fetch the record ID from the Products table where MSKU == msku_value"""
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_PRODUCT_TABLE_NAME}"
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_PAT}"
+    }
 
+    params = {
+        "filterByFormula": f"MSKU='{msku_value}'",
+        "maxRecords": 1
+    }
+
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            records = response.json().get("records", [])
+            if records:
+                return records[0]["id"]
+        else:
+            print(f"Lookup failed for MSKU '{msku_value}':", response.json())
+    except Exception as e:
+        print(f"Exception in get_msku_record_id for MSKU '{msku_value}':", e)
+
+    return None
+
+# -----------------------------
+# 📤 Upload Mapped Rows to Airtable
+# -----------------------------
+def upload_to_airtable(mapped_df):
+    if mapped_df.empty:
+        return "⚠️ No data to upload. Please run mapping first."
+
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_PAT}",
+        "Content-Type": "application/json"
+    }
+
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
+    uploaded = 0
+    skipped = 0
+    failed = 0
+
+    for _, row in mapped_df.iterrows():
+        msku = row.get("MSKU", "")
+        if msku == "UNMAPPED" or not msku:
+            skipped += 1
+            continue
+
+        msku_id = get_msku_record_id(msku)
+        if not msku_id:
+            print(f"⚠️ MSKU '{msku}' not found in product table. Skipping.")
+            skipped += 1
+            continue
+
+        VALID_EVENT_TYPES = {
+            "sale": "Sale",
+            "return": "Return",
+            "adjustment": "Adjustment",
+            "other": "Other"
+        }
+
+        event_type_raw = str(row.get("Event Type", "")).strip().lower()
+        event_type = VALID_EVENT_TYPES.get(event_type_raw)
+
+        fields = {
+            "Date": str(row.get("Date", "")),
+            "Quantity": int(row.get("Quantity", 0)),
+            "MSKU": [msku_id]
+        }
+
+        if event_type:
+            fields["Event Type"] = event_type
+
+        record = {"fields": fields}
+
+
+        try:
+            response = requests.post(url, json=record, headers=headers)
+            if response.status_code in [200, 201]:
+                uploaded += 1
+            else:
+                failed += 1
+                print("❌ Upload error:", response.json())
+        except Exception as e:
+            failed += 1
+            print("❌ Python exception during upload:", e)
+
+    return f"✅ Uploaded: {uploaded}, ⚠️ Skipped (unmapped or missing MSKU): {skipped}, ❌ Failed: {failed}"
+
+
+
+# -----------------------------
+# 🧹 Process + Map SKUs
+# -----------------------------
 def process_files(msku_file, sales_file):
     try:
         msku_df = load_file(msku_file.name)
@@ -27,42 +123,43 @@ def process_files(msku_file, sales_file):
     except Exception as e:
         return pd.DataFrame(), pd.DataFrame(), f"❌ Error: {str(e)}"
 
+# -----------------------------
+# 📊 Plotting
+# -----------------------------
 def plot_top_mskus(df):
-    top = df[df['MSKU'] != 'UNMAPPED']['MSKU'].value_counts().head(10)
+    if "MSKU" not in df.columns:
+        return None
+    
+    filtered = df[df["MSKU"] != "UNMAPPED"]
+    if filtered.empty:
+        return None
+
+    top = filtered["MSKU"].value_counts().head(10)
+    if top.empty:
+        return None
+
     fig, ax = plt.subplots()
-    top.plot(kind='bar', ax=ax, title='Top 10 MSKUs')
+    top.plot(kind="bar", ax=ax, title="Top 10 MSKUs")
     ax.set_ylabel("Order Count")
     return fig
 
+
 def plot_marketplace(df):
-    if 'Marketplace' not in df.columns:
+    if "Marketplace" not in df.columns:
         return None
-    counts = df['Marketplace'].value_counts()
+    
+    counts = df["Marketplace"].dropna().value_counts()
+    if counts.empty:
+        return None
+
     fig, ax = plt.subplots()
-    counts.plot(kind='pie', ax=ax, autopct='%1.1f%%', title="Marketplace Share")
+    counts.plot(kind="pie", ax=ax, autopct="%1.1f%%", title="Marketplace Share")
     return fig
 
-def upload_to_airtable(mapped_df):
-    uploaded = 0
-    for _, row in mapped_df.iterrows():
-        if row['MSKU'] == 'UNMAPPED':
-            continue
-        try:
-            record = {
-                "Order ID": str(row.get("Order ID", "")),
-                "SKU": str(row.get("SKU", "")),
-                "MSKU": str(row.get("MSKU", "")),
-                "Quantity": int(row.get("Quantity", 0)),
-                "Marketplace": row.get("Marketplace", ""),
-                "Date": str(row.get("Date", ""))
-            }
-            airtable.insert(record)
-            uploaded += 1
-        except Exception as e:
-            print("Error uploading row:", e)
-    return f"✅ Uploaded {uploaded} records to Airtable."
 
-# Gradio UI
+# -----------------------------
+# 🎛️ Gradio Interface
+# -----------------------------
 with gr.Blocks() as app:
     gr.Markdown("## 📦 Warehouse Management System (WMS)\nUpload sales + MSKU master to begin")
 
@@ -80,7 +177,12 @@ with gr.Blocks() as app:
         top_mskus_plot = gr.Plot(label="📊 Top Selling MSKUs")
         marketplace_plot = gr.Plot(label="🛍️ Marketplace Share")
 
-    upload_btn = gr.Button("☁️ Upload to Airtable")
+    with gr.Row():
+        upload_btn = gr.Button("☁️ Upload to Airtable")
+        upload_status = gr.Textbox(label="Upload Status", interactive=False)
+
+    upload_btn.click(fn=upload_to_airtable, inputs=[mapped_output], outputs=[upload_status])
+
 
     def full_pipeline(msku_file, sales_file):
         mapped, unmapped, msg = process_files(msku_file, sales_file)
@@ -90,8 +192,13 @@ with gr.Blocks() as app:
                      inputs=[msku_file, sales_file],
                      outputs=[mapped_output, unmapped_output, output_status, top_mskus_plot, marketplace_plot])
 
-    upload_btn.click(fn=upload_to_airtable,
-                     inputs=[mapped_output],
-                     outputs=[output_status])
+    upload_btn.click(
+        fn=upload_to_airtable,
+        inputs=[mapped_output],
+        outputs=[output_status]
+)
+    
+    output_status = gr.Textbox(label="Status Message")
+
 
 app.launch()

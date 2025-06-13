@@ -15,21 +15,27 @@ def load_file(file_path):
         raise ValueError("Unsupported file format")
 
 def fuzzy_map_skus(sales_df, msku_df, threshold=0.8):
-    """
-    Map SKUs from the sales data to MSKUs using fuzzy matching.
-    """
+    # Check required columns
+    if "MSKU" not in msku_df.columns:
+        raise KeyError("Missing column 'MSKU' in the MSKU master file.")
+    
+    if "SKU" not in sales_df.columns:
+        raise KeyError("Missing column 'SKU' in the sales file.")
+
     msku_list = msku_df['MSKU'].dropna().astype(str).tolist()
-    title_list = msku_df['Title'].dropna().astype(str).tolist()
+    title_list = msku_df['Title'].dropna().astype(str).tolist() if "Title" in msku_df.columns else []
 
     def match_sku(sku):
         sku = str(sku).strip()
         match = get_close_matches(sku, msku_list, n=1, cutoff=threshold)
         if match:
             return match[0]
-        match = get_close_matches(sku, title_list, n=1, cutoff=threshold)
-        if match:
-            return match[0]
+        if title_list:
+            match = get_close_matches(sku, title_list, n=1, cutoff=threshold)
+            if match:
+                return match[0]
         return 'UNMAPPED'
 
     sales_df['MSKU'] = sales_df['SKU'].apply(match_sku)
     return sales_df
+
