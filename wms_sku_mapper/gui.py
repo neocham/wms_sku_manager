@@ -7,8 +7,16 @@ import matplotlib.pyplot as plt
 import requests
 from dotenv import load_dotenv
 from sku_mapper import fuzzy_map_skus, load_file
+from pandasai import SmartDataframe
+from pandasai.llm.openai import OpenAI
+import matplotlib.pyplot as plt
+import io
 
-# 🔐 Load Airtable credentials from .env
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+llm = OpenAI(api_token=OPENAI_API_KEY)
+
+
+# Load Airtable credentials from .env
 load_dotenv()
 AIRTABLE_PAT = os.getenv("AIRTABLE_PAT")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
@@ -41,7 +49,7 @@ def get_msku_record_id(msku_value):
     return None
 
 # -----------------------------
-# 📤 Upload Mapped Rows to Airtable
+# Upload Mapped Rows to Airtable
 # -----------------------------
 def upload_to_airtable(mapped_df):
     if mapped_df.empty:
@@ -106,8 +114,30 @@ def upload_to_airtable(mapped_df):
 
 
 
+def ask_ai_question(prompt, df):
+    if df.empty:
+        return "⚠️ No data to analyze. Please upload and process a sales file first."
+
+    try:
+        sdf = SmartDataframe(df, config={"llm": llm})
+        result = sdf.chat(prompt)
+
+        # If the result is a matplotlib figure, show the plot
+        if isinstance(result, plt.Figure):
+            buf = io.BytesIO()
+            result.savefig(buf, format="png")
+            buf.seek(0)
+            return gr.Image(value=buf, format="png"), None
+        else:
+            return None, str(result)
+
+    except Exception as e:
+        return None, f"❌ Error: {str(e)}"
+
+
+
 # -----------------------------
-# 🧹 Process + Map SKUs
+#  Process + Map SKUs
 # -----------------------------
 def process_files(msku_file, sales_file):
     try:
@@ -124,7 +154,7 @@ def process_files(msku_file, sales_file):
         return pd.DataFrame(), pd.DataFrame(), f"❌ Error: {str(e)}"
 
 # -----------------------------
-# 📊 Plotting
+#  Plotting
 # -----------------------------
 def plot_top_mskus(df):
     if "MSKU" not in df.columns:
@@ -158,7 +188,7 @@ def plot_marketplace(df):
 
 
 # -----------------------------
-# 🎛️ Gradio Interface
+#  Gradio Interface
 # -----------------------------
 with gr.Blocks() as app:
     gr.Markdown("## 📦 Warehouse Management System (WMS)\nUpload sales + MSKU master to begin")
@@ -172,6 +202,17 @@ with gr.Blocks() as app:
 
     mapped_output = gr.Dataframe(label="✅ Mapped Sales Data")
     unmapped_output = gr.Dataframe(label="⚠️ Unmapped SKUs")
+
+    with gr.Tab("🔍 AI Insights"):
+        query_input = gr.Textbox(label="Ask a question (e.g., 'show top 5 products')")
+        ask_btn = gr.Button("Ask AI")
+        ai_plot_output = gr.Image()
+        ai_text_output = gr.Textbox()
+
+        ask_btn.click(fn=ask_ai_question,
+                    inputs=[query_input, mapped_output],
+                    outputs=[ai_plot_output, ai_text_output])
+
 
     with gr.Row():
         top_mskus_plot = gr.Plot(label="📊 Top Selling MSKUs")
