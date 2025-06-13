@@ -1,3 +1,4 @@
 pandas
 gradio
 openpyxl
+airtable

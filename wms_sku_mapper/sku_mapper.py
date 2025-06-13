@@ -1,23 +1,35 @@
 # sku_mapper.py
+
 import pandas as pd
+from difflib import get_close_matches
 
-class SKUMapper:
-    def __init__(self, mapping_file):
-        self.mapping_df = pd.read_csv(mapping_file)
-        self.mapping_dict = self._create_mapping()
+def load_file(file_path):
+    """
+    Load CSV or Excel files into a DataFrame.
+    """
+    if file_path.endswith(".csv"):
+        return pd.read_csv(file_path)
+    elif file_path.endswith(".xlsx"):
+        return pd.read_excel(file_path)
+    else:
+        raise ValueError("Unsupported file format")
 
-    def _create_mapping(self):
-        return {
-            str(row['SKU']).strip().upper(): str(row['MSKU']).strip().upper()
-            for _, row in self.mapping_df.iterrows()
-        }
+def fuzzy_map_skus(sales_df, msku_df, threshold=0.8):
+    """
+    Map SKUs from the sales data to MSKUs using fuzzy matching.
+    """
+    msku_list = msku_df['MSKU'].dropna().astype(str).tolist()
+    title_list = msku_df['Title'].dropna().astype(str).tolist()
 
-    def map_skus(self, sales_df, sku_col='SKU'):
-        sales_df['MSKU'] = sales_df[sku_col].apply(
-            lambda x: self.mapping_dict.get(str(x).strip().upper(), 'UNMAPPED')
-        )
-        return sales_df
+    def match_sku(sku):
+        sku = str(sku).strip()
+        match = get_close_matches(sku, msku_list, n=1, cutoff=threshold)
+        if match:
+            return match[0]
+        match = get_close_matches(sku, title_list, n=1, cutoff=threshold)
+        if match:
+            return match[0]
+        return 'UNMAPPED'
 
-    def get_unmapped(self, mapped_df):
-        return mapped_df[mapped_df['MSKU'] == 'UNMAPPED']
-
+    sales_df['MSKU'] = sales_df['SKU'].apply(match_sku)
+    return sales_df
