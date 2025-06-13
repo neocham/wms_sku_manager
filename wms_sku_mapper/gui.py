@@ -7,17 +7,19 @@ import matplotlib.pyplot as plt
 import requests
 from dotenv import load_dotenv
 from sku_mapper import fuzzy_map_skus, load_file
-from pandasai import SmartDataframe
-from pandasai.llm.openai import OpenAI
+import openai
+import pandas as pd
 import matplotlib.pyplot as plt
 import io
+import os
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-llm = OpenAI(api_token=OPENAI_API_KEY)
+# Load environment variables
+load_dotenv()
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
 # Load Airtable credentials from .env
-load_dotenv()
+
 AIRTABLE_PAT = os.getenv("AIRTABLE_PAT")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME", "Sales")
@@ -114,23 +116,39 @@ def upload_to_airtable(mapped_df):
 
 
 
-def ask_ai_question(prompt, df):
-    if df.empty:
-        return "⚠️ No data to analyze. Please upload and process a sales file first."
+def execute_query_with_openai(prompt, df):
+    system_msg = (
+        "You are a data analyst. Convert user instructions into Python Pandas code to run on a DataFrame named df. "
+        "Only output the code (no explanation). If the user asks for a chart, use matplotlib to show it. "
+        "DO NOT define the dataframe — assume it's already loaded."
+    )
 
     try:
-        sdf = SmartDataframe(df, config={"llm": llm})
-        result = sdf.chat(prompt)
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",  # fallback model
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0,
+        )
+        code = response.choices[0].message['content'].strip("`").replace("python", "")
 
-        # If the result is a matplotlib figure, show the plot
-        if isinstance(result, plt.Figure):
+        # Safe execution context
+        local_env = {'df': df, 'pd': pd, 'plt': plt, 'io': io}
+        exec(code, {}, local_env)
+
+        if "plt" in code:
             buf = io.BytesIO()
-            result.savefig(buf, format="png")
+            plt.savefig(buf, format="png")
             buf.seek(0)
+            plt.clf()
             return gr.Image(value=buf, format="png"), None
         else:
-            return None, str(result)
-
+            result = local_env.get('result', None)
+            if result is not None:
+                return None, str(result)
+            return None, "✅ Code ran successfully but no result was returned."
     except Exception as e:
         return None, f"❌ Error: {str(e)}"
 
@@ -204,14 +222,15 @@ with gr.Blocks() as app:
     unmapped_output = gr.Dataframe(label="⚠️ Unmapped SKUs")
 
     with gr.Tab("🔍 AI Insights"):
-        query_input = gr.Textbox(label="Ask a question (e.g., 'show top 5 products')")
+        query_input = gr.Textbox(label="Ask a question about the data")
         ask_btn = gr.Button("Ask AI")
         ai_plot_output = gr.Image()
         ai_text_output = gr.Textbox()
 
-        ask_btn.click(fn=ask_ai_question,
+        ask_btn.click(fn=execute_query_with_openai,
                     inputs=[query_input, mapped_output],
                     outputs=[ai_plot_output, ai_text_output])
+
 
 
     with gr.Row():
