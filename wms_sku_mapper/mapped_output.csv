@@ -1,0 +1,4 @@
+OrderID,SKU,Quantity,Marketplace,MSKU
+1,GLD123,2,Amazon,GOLDENAPPLE
+2,RED456,1,Flipkart,REDAPPLE
+3,XYZ999,4,Amazon,UNMAPPED

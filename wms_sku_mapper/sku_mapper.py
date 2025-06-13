@@ -21,5 +21,3 @@ class SKUMapper:
     def get_unmapped(self, mapped_df):
         return mapped_df[mapped_df['MSKU'] == 'UNMAPPED']
 
-    def get_mapped(self, mapped_df):
-        return mapped_df[mapped_df['MSKU'] != 'UNMAPPED']
