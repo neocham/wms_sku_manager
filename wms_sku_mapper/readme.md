@@ -64,16 +64,6 @@ This will launch the Gradio app at `http://localhost:7860`.
 
 ---
 
-## 🌐 Deploying on Replit
-
-1. Create a new Replit with **Python**
-2. Upload the code files
-3. Add your secrets (e.g., `AIRTABLE_PAT`, `OPENAI_API_KEY`) via Secrets Manager
-4. Run `gui.py`
-5. You’ll get a public link like `https://wms-sku.replit.app`
-
----
-
 ## 🧠 AI Query Examples
 
 You can ask the system:
